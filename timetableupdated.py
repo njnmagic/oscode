@@ -10,7 +10,6 @@ num_classes = int(input("Enter number of classes: "))
 class_names = [input(f"Enter class {i+1} name: ") for i in range(num_classes)]
 
 num_subjects = int(input("\nEnter number of subjects: "))
-
 subjects_data = {}
 subject_teachers = {}
 special_subjects = {}
@@ -30,6 +29,9 @@ for i in range(num_subjects):
         input(f"Consecutive periods needed for {subject}: ")
     )
 
+periods_per_day = int(input("\nEnter periods per day: "))
+
+
 # ---------------------------------------------------
 # GENERATE
 # ---------------------------------------------------
@@ -39,27 +41,24 @@ def generate_timetable(class_name, periods_per_day):
     timetable = {d: [""] * periods_per_day for d in DAYS}
     teacher_map = {d: [""] * periods_per_day for d in DAYS}
 
-    subject_used = {s: 0 for s in subjects_data}
-
-    subject_teacher_map = {
-        s: random.choice(subject_teachers[s])
-        for s in subjects_data
-    }
-
     teacher_schedule = {
         t: {d: [False] * periods_per_day for d in DAYS}
         for teachers in subject_teachers.values()
         for t in teachers
     }
 
-    reserved = set()  # 🔒 locks consecutive blocks
+    reserved = set()
+
+    subject_teacher_map = {
+        s: random.choice(subject_teachers[s])
+        for s in subjects_data
+    }
+
+    block_day_used = {}  # subject → fixed block day
 
     # ---------------------------------------------------
     # HELPERS
     # ---------------------------------------------------
-
-    def remaining(subject):
-        return subjects_data[subject] - subject_used[subject]
 
     def teacher_free(teacher, day, start, length):
         return all(
@@ -67,85 +66,103 @@ def generate_timetable(class_name, periods_per_day):
             for p in range(start, start + length)
         )
 
-    def place(subject, teacher, day, start, length):
+    def can_place(subject, teacher, day, start, length):
 
-        if remaining(subject) < length:
+        if timetable[day][start:start+length] != [""] * length:
             return False
+
+        if any((day, start+i) in reserved for i in range(length)):
+            return False
+
+        if not teacher_free(teacher, day, start, length):
+            return False
+
+        return True
+
+    def place(subject, teacher, day, start, length):
 
         for i in range(length):
             timetable[day][start + i] = subject
             teacher_map[day][start + i] = teacher
             teacher_schedule[teacher][day][start + i] = True
+            reserved.add((day, start + i))
 
-        subject_used[subject] += length
         return True
 
     # ---------------------------------------------------
-    # STEP 1: STRICT CONSECUTIVE BLOCK (FIXED)
+    # STEP 1: CREATE STRUCTURE (BLOCK + SINGLES)
     # ---------------------------------------------------
 
-    for subject in subjects_data:
+    schedule = []
+
+    for subject, total in subjects_data.items():
 
         teacher = subject_teacher_map[subject]
         block = special_subjects[subject]
 
+        # BLOCK (only once)
+        if block > 1 and total >= block:
+            schedule.append((subject, teacher, block, "BLOCK"))
+            total -= block
+
+        # SINGLES
+        for _ in range(total):
+            schedule.append((subject, teacher, 1, "SINGLE"))
+
+    random.shuffle(schedule)
+
+    # ---------------------------------------------------
+    # STEP 2: PLACE BLOCKS FIRST (FIXED DAY)
+    # ---------------------------------------------------
+
+    for subject, teacher, length, mode in schedule:
+
         placed = False
 
-        for _ in range(100):
+        # BLOCK RULE
+        if mode == "BLOCK":
 
-            day = random.choice(DAYS)
+            if subject in block_day_used:
+                day = block_day_used[subject]
+            else:
+                day = random.choice(DAYS)
+                block_day_used[subject] = day
 
-            for p in range(periods_per_day - block + 1):
+            for _ in range(200):
+                start = random.randint(0, periods_per_day - length)
 
-                # check availability + reservation
-                ok = True
-
-                for i in range(block):
-                    if timetable[day][p + i] != "" or (day, p + i) in reserved:
-                        ok = False
-                        break
-
-                if not ok:
-                    continue
-
-                if teacher_free(teacher, day, p, block):
-
-                    for i in range(block):
-                        timetable[day][p + i] = subject
-                        teacher_map[day][p + i] = teacher
-                        teacher_schedule[teacher][day][p + i] = True
-                        reserved.add((day, p + i))  # lock
-
-                    subject_used[subject] += block
+                if can_place(subject, teacher, day, start, length):
+                    place(subject, teacher, day, start, length)
                     placed = True
                     break
 
-            if placed:
-                break
+        schedule[schedule.index((subject, teacher, length, mode))] = schedule[schedule.index((subject, teacher, length, mode))] if placed else schedule[schedule.index((subject, teacher, length, mode))]
 
     # ---------------------------------------------------
-    # STEP 2: SINGLE PERIOD DISTRIBUTION
+    # STEP 3: PLACE SINGLE PERIODS (SPREAD ACROSS DAYS)
     # ---------------------------------------------------
 
-    for subject in subjects_data:
+    for subject, teacher, length, mode in schedule:
 
-        teacher = subject_teacher_map[subject]
+        if mode != "SINGLE":
+            continue
 
-        while remaining(subject) > 0:
+        placed = False
+
+        for _ in range(200):
 
             days = DAYS.copy()
             random.shuffle(days)
 
-            placed = False
-
             for day in days:
+
+                # avoid block day for same subject
+                if day == block_day_used.get(subject, None):
+                    continue
 
                 for p in range(periods_per_day):
 
-                    if timetable[day][p] != "" or (day, p) in reserved:
-                        continue
-
-                    if teacher_free(teacher, day, p, 1):
+                    if can_place(subject, teacher, day, p, 1):
 
                         place(subject, teacher, day, p, 1)
                         placed = True
@@ -154,73 +171,25 @@ def generate_timetable(class_name, periods_per_day):
                 if placed:
                     break
 
-            if not placed:
+            if placed:
                 break
 
     # ---------------------------------------------------
-    # STEP 3: MIN 3 PERIODS PER DAY (SOFT RULE)
+    # VALIDATION (STRICT CHECK)
     # ---------------------------------------------------
 
-    for day in DAYS:
+    count = {s: 0 for s in subjects_data}
 
-        filled = sum(1 for x in timetable[day] if x != "")
-
-        if filled >= 3:
-            continue
-
-        needed = 3 - filled
-
-        subjects = list(subjects_data.keys())
-        random.shuffle(subjects)
-
-        for subject in subjects:
-
-            if needed <= 0:
-                break
-
-            teacher = subject_teacher_map[subject]
-
-            for p in range(periods_per_day):
-
-                if timetable[day][p] == "" and (day, p) not in reserved:
-
-                    if teacher_free(teacher, day, p, 1):
-
-                        place(subject, teacher, day, p, 1)
-                        needed -= 1
-                        break
-
-    # ---------------------------------------------------
-    # STEP 4: FREE ONLY AT START/END (NO MIDDLE FREE)
-    # ---------------------------------------------------
-
-    for day in DAYS:
-
-        filled = [
-            (timetable[day][p], teacher_map[day][p])
-            for p in range(periods_per_day)
-            if timetable[day][p] != ""
-        ]
-
-        free_slots = periods_per_day - len(filled)
-
-        start_free = random.randint(0, free_slots)
-        end_free = free_slots - start_free
-
-        packed = (
-            [("", "")] * start_free +
-            filled +
-            [("", "")] * end_free
-        )
-
+    for d in DAYS:
         for p in range(periods_per_day):
+            if timetable[d][p]:
+                count[timetable[d][p]] += 1
 
-            if p < len(packed):
-                timetable[day][p] = packed[p][0]
-                teacher_map[day][p] = packed[p][1]
-            else:
-                timetable[day][p] = ""
-                teacher_map[day][p] = ""
+    for s in subjects_data:
+        if count[s] != subjects_data[s]:
+            print(f"\nERROR: {s} mismatch!")
+            print("Expected:", subjects_data[s], "Got:", count[s])
+            return
 
     # ---------------------------------------------------
     # DISPLAY
@@ -228,7 +197,7 @@ def generate_timetable(class_name, periods_per_day):
 
     print("\n")
     print("=" * 80)
-    print(f"{class_name} TIMETABLE")
+    print(f"{class_name} TIMETABLE (FINAL RULE BASED)")
     print("=" * 80)
 
     for day in DAYS:
@@ -246,15 +215,11 @@ def generate_timetable(class_name, periods_per_day):
             else:
                 print(f"Period {p+1}: {s} ({t})")
 
+
 # ---------------------------------------------------
 # MAIN
 # ---------------------------------------------------
 
-periods_per_day = int(input("\nEnter periods per day: "))
-
 for class_name in class_names:
-
     generate_timetable(class_name, periods_per_day)
-
     print("\nSUCCESS: Timetable generated!")
-
