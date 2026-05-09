@@ -144,78 +144,70 @@ def generate_timetable(class_name):
 
             if not placed:
                 break
-
     # ------------------------------------------------
-    # STEP 3: ENSURE MINIMUM 3 FILLED PERIODS PER DAY
-    # ------------------------------------------------
-    for day in DAYS:
-
-        filled_slots = [
-            p for p in range(PERIODS_PER_DAY)
-            if timetable[day][p] != ""
-        ]
-
-        needed = 3 - len(filled_slots)
-
-        if needed > 0:
-
-            available_subjects = list(subjects_data.keys())
-
-            while needed > 0:
-
-                random.shuffle(available_subjects)
-
-                placed = False
-
-                for subject in available_subjects:
-
-                    teacher = subject_teacher_map[subject]
-
-                    for p in range(PERIODS_PER_DAY):
-
-                        if timetable[day][p] != "":
-                            continue
-
-                        if is_teacher_free(teacher, day, p, 1):
-
-                            timetable[day][p] = subject
-                            teacher_map[day][p] = teacher
-                            teacher_schedule[teacher][day][p] = True
-
-                            needed -= 1
-                            placed = True
-                            break
-
-                    if placed:
-                        break
-
-                if not placed:
-                    break
-
-    # ------------------------------------------------
-    # STEP 4: PACK (NO MIDDLE GAPS, FREE ONLY START/END)
+    # STEP 3: PACK (FREE AT START + END) + MIN 3 PERIODS
     # ------------------------------------------------
     for day in DAYS:
-
+    
         filled = [
             (timetable[day][p], teacher_map[day][p])
             for p in range(PERIODS_PER_DAY)
             if timetable[day][p] != ""
         ]
-
+    
         free = PERIODS_PER_DAY - len(filled)
-
-        if random.choice(["start", "end"]) == "start":
-            packed = [("", "")] * free + filled
-        else:
-            packed = filled + [("", "")] * free
-
+    
+        # ----------------------------
+        # ENSURE MINIMUM 3 PERIODS
+        # ----------------------------
+        subjects = list(subjects_data.keys())
+    
+        while len(filled) < 3:
+    
+            placed = False
+            random.shuffle(subjects)
+    
+            for subject in subjects:
+    
+                teacher = subject_teacher_map[subject]
+    
+                for p in range(PERIODS_PER_DAY):
+    
+                    if timetable[day][p] != "":
+                        continue
+    
+                    if is_teacher_free(teacher, day, p, 1):
+    
+                        filled.append((subject, teacher))
+                        teacher_schedule[teacher][day][p] = True
+    
+                        placed = True
+                        break
+    
+                if placed:
+                    break
+    
+            if not placed:
+                break
+    
+        # ----------------------------
+        # PACKING (FREE BOTH SIDES)
+        # ----------------------------
+        free = PERIODS_PER_DAY - len(filled)
+    
+        start_free = random.randint(0, free)
+        end_free = free - start_free
+    
+        packed = [("", "")] * start_free + filled + [("", "")] * end_free
+    
         for p in range(PERIODS_PER_DAY):
-
-            timetable[day][p] = packed[p][0]
-            teacher_map[day][p] = packed[p][1]
-
-    return timetable, teacher_map
+    
+            if p < len(packed):
+                timetable[day][p] = packed[p][0]
+                teacher_map[day][p] = packed[p][1]
+            else:
+                timetable[day][p] = ""
+                teacher_map[day][p] = ""
 
 # ---------------------------------------------------
 # DISPLAY
