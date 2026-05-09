@@ -66,26 +66,6 @@ def generate_timetable(class_name, periods_per_day):
             for p in range(start, start + length)
         )
 
-    def no_internal_gaps(day, start, length):
-
-        temp = timetable[day][:]
-
-        for i in range(start, start + length):
-            temp[i] = "X"
-
-        filled = [i for i, x in enumerate(temp) if x != ""]
-
-        if not filled:
-            return True
-
-        first, last = filled[0], filled[-1]
-
-        for i in range(first, last + 1):
-            if temp[i] == "":
-                return False
-
-        return True
-
     def can_place(subject, teacher, day, start, length):
 
         if start + length > periods_per_day:
@@ -100,10 +80,6 @@ def generate_timetable(class_name, periods_per_day):
         if not teacher_free(teacher, day, start, length):
             return False
 
-        # NEW RULE: no internal gaps allowed
-        if not no_internal_gaps(day, start, length):
-            return False
-
         return True
 
     def place(subject, teacher, day, start, length):
@@ -115,7 +91,7 @@ def generate_timetable(class_name, periods_per_day):
             reserved.add((day, start + i))
 
     # ---------------------------------------------------
-    # STEP 1: BUILD SCHEDULE LIST
+    # STEP 1: BUILD SCHEDULE (BLOCK + SINGLE SPLIT)
     # ---------------------------------------------------
 
     schedule = []
@@ -125,17 +101,19 @@ def generate_timetable(class_name, periods_per_day):
         teacher = subject_teacher_map[subject]
         block = special_subjects[subject]
 
+        # ONE BLOCK (consecutive part)
         if block > 1 and total >= block:
             schedule.append((subject, teacher, block, "BLOCK"))
             total -= block
 
+        # remaining singles
         for _ in range(total):
             schedule.append((subject, teacher, 1, "SINGLE"))
 
     random.shuffle(schedule)
 
     # ---------------------------------------------------
-    # STEP 2: PLACE BLOCKS
+    # STEP 2: PLACE BLOCKS (ONE DAY ONLY)
     # ---------------------------------------------------
 
     for subject, teacher, length, mode in schedule:
@@ -143,21 +121,24 @@ def generate_timetable(class_name, periods_per_day):
         if mode != "BLOCK":
             continue
 
-        if subject in block_day_used:
-            day = block_day_used[subject]
-        else:
-            day = random.choice(DAYS)
-            block_day_used[subject] = day
+        if subject not in block_day_used:
+            block_day_used[subject] = random.choice(DAYS)
+
+        day = block_day_used[subject]
+
+        placed = False
 
         for _ in range(200):
+
             start = random.randint(0, periods_per_day - length)
 
             if can_place(subject, teacher, day, start, length):
                 place(subject, teacher, day, start, length)
+                placed = True
                 break
 
     # ---------------------------------------------------
-    # STEP 3: PLACE SINGLE PERIODS
+    # STEP 3: PLACE SINGLE PERIODS (SPREAD OUT)
     # ---------------------------------------------------
 
     for subject, teacher, length, mode in schedule:
@@ -165,26 +146,21 @@ def generate_timetable(class_name, periods_per_day):
         if mode != "SINGLE":
             continue
 
+        placed = False
+
         for _ in range(200):
 
-            days = DAYS.copy()
-            random.shuffle(days)
+            day = random.choice(DAYS)
 
-            placed = False
+            # avoid block day for that subject
+            if subject in block_day_used and day == block_day_used[subject]:
+                continue
 
-            for day in days:
+            for p in range(periods_per_day):
 
-                if day == block_day_used.get(subject):
-                    continue
-
-                for p in range(periods_per_day):
-
-                    if can_place(subject, teacher, day, p, 1):
-                        place(subject, teacher, day, p, 1)
-                        placed = True
-                        break
-
-                if placed:
+                if can_place(subject, teacher, day, p, 1):
+                    place(subject, teacher, day, p, 1)
+                    placed = True
                     break
 
             if placed:
